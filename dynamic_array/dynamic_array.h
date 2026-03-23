@@ -2,31 +2,53 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <type_traits>
 
 template <typename T>
 class DynamicArray {
 private:
-    size_t size;
-    size_t capacity;
-    T* array;
+    size_t _size;
+    size_t _capacity;
+    T* _array;
 
     // function to double array size
     void grow() {
-        size_t new_capacity = std::max(size_t(4), capacity * 2);
-        T* new_array = nullptr;
+        // new T() => allocate memory + manage lifetime
+        // ::operator new => only allocate memory
+        // new loc T() => gice allocated memory loc, construct object there
 
+        size_t new_capacity = std::max(size_t(4), _capacity * 2);
+        T* new_array = static_cast<T*>(::operator new[](new_capacity * sizeof(T))); // get raw memory
+
+        size_t i = 0;
         try {
-            new_array = new T[new_capacity];
-            std::move(array, array + size, new_array);
+            if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
+                for (; i < _size; i++) {
+                    new (new_array + i) T(std::move(_array[i])); // placement new to construct object
+                }
+            }
+            else {
+                for (; i < _size; i++) {
+                    new (new_array + i) T(_array[i]);
+                }
+            }
         }
         catch (...) {
-            delete[] new_array;
+            // rollback in case of failure
+            for (; i > 0; i--) {
+                new_array[i-1].~T(); // call destructor manually for placement new constructed memory
+            }
+            ::operator delete[](static_cast<void*>(new_array));
             throw;
         }
 
-        delete[] array;
-        array = new_array;
-        capacity = new_capacity;
+        for (size_t j = 0; j < _size; j++) {
+            _array[j].~T();
+        }
+
+        ::operator delete[](static_cast<void*>(_array));
+        _capacity = new_capacity;
+        _array = new_array;
     }
 
     // function to half array size
@@ -187,13 +209,13 @@ public:
 
     // access element by index
     T& operator[](size_t idx) {
-        if (idx >= size) throw new std::out_of_range("Index out of range!");
+        if (idx >= size) throw std::out_of_range("Index out of range!");
         return array[idx];
     }
 
     // access element by index (const)
     const T& operator[](size_t idx) const {
-        if (idx >= size) throw new std::out_of_range("Index out of range!");
+        if (idx >= size) throw std::out_of_range("Index out of range!");
         return array[idx];
     }
 
