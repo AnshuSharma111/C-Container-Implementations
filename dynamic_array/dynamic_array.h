@@ -7,9 +7,9 @@
 template <typename T>
 class DynamicArray {
 private:
-    size_t _size;
-    size_t _capacity;
-    T* _array;
+    size_t _size = 0;
+    size_t _capacity = 0;
+    T* _array = nullptr;
 
     // function to resize array
     void resize(size_t new_capacity) {
@@ -64,17 +64,15 @@ private:
 
 public:
     // default constructor
-    DynamicArray() {
-        _capacity = 1;
-        _size = 0;
-        _array = static_cast<T*>(::operator new(_capacity * sizeof(T), std::align_val_t(alignof(T))));
-    }
+    DynamicArray() noexcept = default;
 
-    // default constructor capacity override
-    DynamicArray(size_t capacity) {
-        // deep questions, should 0 capacity be allowed?
+    // default constructor
+    explicit DynamicArray(size_t capacity) {
         if (capacity == 0) {
-            throw std::invalid_argument("capacity must > 0!");
+            _array = nullptr;
+            _size = 0;
+            _capacity = 0;
+            return;
         }
 
         _capacity = capacity;
@@ -84,25 +82,29 @@ public:
         _array = static_cast<T*>(::operator new(_capacity * sizeof(T), std::align_val_t(alignof(T))));
     }
 
-    // default constructor capacity, default override
+    // default constructor
     DynamicArray(size_t capacity, const T& x) {
-        static_assert(std::is_copy_constructible_v<T>, "type is not copyable!");
+        static_assert(std::is_copy_constructible_v<T>, "type is not copy constructible!");
 
         if (capacity == 0) {
-            throw std::invalid_argument("capacity must > 0!");
+            _array = nullptr;
+            _size = 0;
+            _capacity = 0;
+            return;
         }
-
-        _capacity = capacity;
-        _size = capacity;
 
         // accquire memory
         _array = static_cast<T*>(::operator new(_capacity * sizeof(T), std::align_val_t(alignof(T))));
         // now construct
         size_t i = 0;
         try {
-            for (; i < _capacity; i++) {
+            for (; i < capacity; i++) {
                 new (_array + i) T(x); // assumes T has a copy constructor
             }
+
+            // safely constructed, update parameters
+            _capacity = capacity;
+            _size = capacity;
         }
         catch (...) {
             for (; i > 0; i--) {
@@ -113,31 +115,80 @@ public:
         }
     }
 
-    // Destructor
+    // destructor
     ~DynamicArray() {
-        delete[] _array;
+        size_t i = 0;
+
+        // destruct
+        for (; i < _size; i++) {
+            _array[i].~T();
+        }
+
+        // free memory
+        ::operator delete(_array, std::align_val_t(alignof(T)));
     }
 
     // copy constructor
     DynamicArray(const DynamicArray& other) {
-        _size = other._size;
-        _capacity = other._capacity;
+        static_assert(std::is_copy_constructible_v<T>, "type is not copy constructible!");
 
-        _array = new T[_capacity];
-        std::copy(other._array, other._array + _size, _array);
+        // accquire memory
+        _array = static_cast<T*>(::operator new(other._capacity * sizeof(T), std::align_val_t(alignof(T))));
+
+        // try constructing objects
+        size_t i = 0;
+        try {
+            for (; i < other._size; i++) {
+                new (_array + i) T(other._array[i]); // T must be copy constructable
+            }
+
+            // safely copied
+            _size = other._size;
+            _capacity = other._capacity;
+        }
+        catch (...) {
+            for (; i > 0; i--) {
+                _array[i - 1].~T();
+            }
+
+            ::operator delete(_array, std::align_val_t(alignof(T)));
+            throw;
+        }
     }
 
     // assignment operator
     DynamicArray& operator=(const DynamicArray& other) {
         if (this != &other) {
-            T* newArray = new T[other._capacity];
-            std::copy(other._array, other._array + _size, newArray);
+            T* new_array = static_cast<T*>(::operator new(other._capacity * sizeof(T), std::align_val_t(alignof(T))));
+            
+            size_t i = 0;
+            try {
+                for (; i < other._size; i++) {
+                    new (new_array + i) T(other._array[i]);
+                }
 
-            delete[] _array;
 
-            _size = other._size;
-            _capacity = other._capacity;
-            _array = newArray;
+                // destruct
+                for (size_t j = 0; j < _size; j++) {
+                    _array[j].~T();
+                }
+
+                // deallocate
+                ::operator delete(_array, std::align_val_t(alignof(T)));
+
+                // safe now
+                _size = other._size;
+                _capacity = other._capacity;
+                _array = new_array;
+            }
+            catch (...) {
+                for (; i > 0; i--) {
+                    new_array[i - 1].~T();
+                }
+
+                ::operator delete(new_array, std::align_val_t(alignof(T)));
+                throw;
+            }
         }
 
         return *this;
@@ -157,7 +208,13 @@ public:
     // move assignment
     DynamicArray& operator=(DynamicArray&& other) noexcept {
         if (this != &other) {
-            delete[] _array;
+            // destruct
+            for (size_t i = 0; i < _size; i++) {
+                _array[i].~T();
+            }
+
+            // deallocate
+            ::operator delete(_array, std::align_val_t(alignof(T)));
 
             _size = other._size;
             _capacity = other._capacity;
